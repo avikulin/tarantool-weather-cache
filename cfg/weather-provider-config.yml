@@ -1,0 +1,13 @@
+weather-provider:
+  uri: https://api.open-meteo.com/v1/forecast
+  x_coord_param: longitude
+  y_coord_param: latitude
+  actuality_options:
+    - hourly
+    - daily
+    - current
+  query_options:
+    - temperature_2m
+    - wind_speed_10m
+    - relative_humidity_2m
+
