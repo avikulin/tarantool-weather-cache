@@ -3,12 +3,19 @@ local cluster_cfg = require('cartridge.clusterwide-config')
 local log = require('log')
 
 -- подключаем кастомные модули
+
+--[[    ИСТОЧНИК ПРОБЛЕМЫ ВОТ В ЭТОМ ИМПОРТЕ    ]]
 local utils = require('app.src.validation_utils')
+
+--[[
 local http_handlers = require('app.src.http_handlers')
 
 local ROOT_CONFIG_KEY<const> = "weather-provider"
+]]
 
 local function init(opts) -- luacheck: no unused args
+    return true
+    --[[
     log.info("Начало инициализации роли <app.roles.router>")
     -- загружаем дефолный конфиг
     cluster_cfg.load("cfg/weather-provider-config.yml")
@@ -17,7 +24,7 @@ local function init(opts) -- luacheck: no unused args
     local httpd = assert(cartridge.service_get('httpd'), "Failed to get httpd service")
     httpd:route({method = 'GET', path = '/hello'}, http_handlers.get_weather)
 
-    return true
+    return true]]
 end
 
 local function stop()
@@ -25,7 +32,7 @@ local function stop()
 end
 
 local function validate_config(conf_new, conf_old) -- luacheck: no unused args
-
+    --[[
     local cfg_weather_provider = conf_new[ROOT_CONFIG_KEY]
 
     if (cfg_weather_provider == nil) then
@@ -59,6 +66,7 @@ local function validate_config(conf_new, conf_old) -- luacheck: no unused args
     end
 
     return true
+    ]]
 end
 
 local function apply_config(conf, opts) -- luacheck: no unused args

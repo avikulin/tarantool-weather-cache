@@ -34,7 +34,7 @@ local function apply_config(conf, opts) -- luacheck: no unused args
 end
 
 return {
-    role_name = 'cache',
+    role_name = 'app.roles.cache',
     init = init,
     stop = stop,
     validate_config = validate_config,

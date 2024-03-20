@@ -59,7 +59,7 @@ end
 return {
     validate_value_present_in_array = validate_value_present_in_array,
     validate_numeric_value = validate_numeric_value,
-    check_string_is_empty = check_string_is_empty,
     validate_array_value = validate_array_value,
-    validate_string_value = validate_string_value
+    validate_string_value = validate_string_value,
+    check_string_is_empty = check_string_is_empty
 }
