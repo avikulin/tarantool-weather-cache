@@ -4,6 +4,7 @@ main-router:
   roles:
   - failover-coordinator
   - vshard-router
+  - app.roles.router
   all_rw: false
 
 storage-replica-set-1:
@@ -12,8 +13,9 @@ storage-replica-set-1:
   - s1-replica
   roles:
   - vshard-storage
+  - app.roles.cache
   weight: 1
-  all_rw: false
+  all_rw: true
   vshard_group: default
 
 storage-replica-set-2:
@@ -22,6 +24,7 @@ storage-replica-set-2:
   - s2-replica
   roles:
   - vshard-storage
+  - app.roles.cache
   weight: 1
-  all_rw: false
+  all_rw: true
   vshard_group: default

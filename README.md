@@ -1,89 +1,103 @@
-# Simple Tarantool Cartridge-based application
+# Пример реализации Read-Aside кэша на Tarantool
 
-This a simplest application based on Tarantool Cartridge.
+Функциональное приложение на *<Lua>*, созданное по шаблону *<Tarantool Cartridge>*.
 
-## Quick start
+Приложение выполняет запросы к API-сервису *<OpenMeteo>*, кэшируя полученную информацию.
 
-To build application and setup topology:
+При поступлении нового запроса, приложение выполняет следующий порядок дейтвий:
+
+1. Проверяет состояние кэша
+   1. если в кэше присутствует запрашиваемая информацию - ответ выдается из кэша
+   2. если в кэше информацию отсутствует, то выполняется запрос к стороннему API, который сохраняется в кэше перед передачей клиенту.
+2. Обрабатывает <evict>-политики кэша в соответствии с конфигурацией ([см. ниже](#параметры-управления-состояние-кэша))
+3. Передает ответ пользователю, дополняя его служебными заголовками ([см. ниже](#использование)), которые отображают состояние кэша в разрезе данной сущности.
+
+## Развертывание и запуск
+
+Сборка и запуск приложения выполняется стандартными средствами *<cartridge-cli>* в соответствии со следующим примером:
 
 ```bash
 cartridge build
 cartridge start -d
 cartridge replicasets setup --bootstrap-vshard
 ```
-
-Now you can visit http://localhost:8081 and see your application's Admin Web UI.
-
-**Note**, that application stateboard is always started by default.
-See [`.cartridge.yml`](./.cartridge.yml) file to change this behavior.
-
-## Application
-
-Application entry point is [`init.lua`](./init.lua) file.
-It configures Cartridge, initializes admin functions and exposes metrics endpoints.
-Before requiring `cartridge` module `package_compat.cfg()` is called.
-It configures package search path to correctly start application on production
-(e.g. using `systemd`).
-
-## Roles
-
-Application has one simple role, [`app.roles.custom`](./app/roles/router.lua).
-It exposes `/hello` and `/metrics` endpoints:
+После первоначального развертывания приложения, в него необходимо загрузить параметры настройки ролей.
+Это выполняется из основного каталога приложения с использованием следующей команды:
 
 ```bash
-curl localhost:8081/hello
-curl localhost:8081/metrics
+curl -v 'localhost:8081/admin/config' -X PUT --data-binary @cfg/cluster-config.yml
 ```
 
-Also, Cartridge roles [are registered](./init.lua)
-(`vshard-storage`, `vshard-router` and `metrics`).
+## Параметры конфигурирования
 
-You can add your own role, but don't forget to register in using
-`cartridge.cfg` call.
+Конфигурация состоит из 2-х основных разделов:
 
-## Instances configuration
+* Параметры подключения к *<Open Meteo API>*. 
+* Параметры управления состояние кэша.  
 
-Configuration of instances that can be used to start application
-locally is places in [instances.yml](./instances.yml).
-It is used by `cartridge start`.
+> Функциональность обращения *<Open Meteo API>() включена в роль *<router>*, а функциональность управления кэшем включена в роль *<cache>*, поэтому данные разделы конфигурации автоматически валидируются при активации соответствующих ролей на узлах.
 
-## Topology configuration
+### Параметры подключения к *<Open Meteo API>*
 
-Topology configuration is described in [`replicasets.yml`](./replicasets.yml).
-It is used by `cartridge replicasets setup`.
-
-## Tests
-
-Simple unit and integration tests are placed in [`test`](./test) directory.
-
-First, we need to install test dependencies:
-
-```bash
-./deps.sh
+Конфигурация работы с *<Open Meteo API>* состоит из следующих параметров:
+<a id="open-meteo-api"></a>
+```yml
+weather-provider:
+  uri: https://api.open-meteo.com/v1/forecast   # Основной URI отправки запросов
+  x_coord_param: longitude                      # Название параметра, в котором передается геогр. долгота
+  y_coord_param: latitude                       # Название параметра, в котором передается геогр. широта
+  actuality_options:                            # Возможные типы обрабатываемых запросов
+    - current                                   #   - получение данных на текущий момент
+    - hourly                                    #   - получение прогноза на ближайший час
+    - minutely_15                               #   - получение данных на ближайшие 15 минут
+  query_options:                                # Состав данных, которые мы хотим получить по запросу любого типа
+    - temperature_2m                            #   - температура по Цельсию на высоте 2 м над землей
+    - wind_speed_10m                            #   - скорость ветра на высоте 10 м над землей
+    - relative_humidity_2m                      #   - относительная влажность воздуха на высоте 2 м над землей
 ```
 
-Then, run linter:
+> При выполнении запроса к приложению, оно ожидает, что первый PATH-параметр будет соответствовать одному из значений <actuality_options>, а параметры <x_coord_param>, <y_coord_param> и <query_options> будут переданы в QUERY-параметрах запроса.
 
-```bash
-.rocks/bin/luacheck .
+### Параметры управления состояние кэша
+
+Конфигурация управления внутренним кэшем данных состоит из следующих параметров:
+
+```yml
+cache-dal:
+  size: 10                      # Передел роста размера кэша, после которого начинается вытеснение элементов 
+  time-to-live: 30              # Макс. время актуальности элемента в кэше (секунды), после истечения которого элемент вытесняется
+  eviction_strategy: lru        # Политика отбора элементов для вытеснения
 ```
 
-Now we can run tests:
+Приложение поддерживает следующие возможные политики вытеснения:
 
-```bash
-cartridge stop  # to prevent "address already in use" error
-.rocks/bin/luatest -v
+1. **FIFO** *(first-in-first-out)*. Первым будет вытеснен элемент, который был добавлен в кэш хронологически раньше.
+2. **LRU** *(least reasently used)*. Первым будет вытеснен элемент, к которому было наименьшее *количество* обращений.
+3. **LRA** *(least reasently accessed)*. Первым будет вытеснен элемент, к которому наибольшее время не было обращений.
+
+## Использование
+
+Приложение ожидает <GET>-запрос к ноде <router> по основному порту <http_port>, указанному в конфигурационном файле [instances.yml](instances.yml)
+Запрос должен иметь следующий формат:
+
+```url
+http://localhost:8081/weather/current?latitude=55.752004&longitude=37.617734
 ```
+1. <PATH>-параметр "/weather/:actuality". Определяет тип актуальности прогноза и должен лексикографически соответствовать одному из значений конфигурации <weather-provider/actuality_options>.
+2. <QUERY>-параметр геграфической долготы. Имя параметра должно лексикографически соответствовать параметру <weather-provider/x_coord_param>.
+3. <QUERY>-параметр геграфической широты. Имя параметра должно лексикографически соответствовать параметру <weather-provider/y_coord_param>.
 
-## Admin
+Ответы сервиса дополняются рядом специальных заголовков:
 
-Application has admin function [`probe`](./app/admin.lua) configured.
-You can use it to probe instances:
+* <x-cache-hit-rate>. Соответствует количеству зарегистрированных обращений к данному элементу за все время пребывания в кэше.
+* <x-cache-ttl>. Соответствует оставшемуся времени жизни (секунды) данного элемента до вытеснения из кэша.
+* <x-cached-data>. Соответствует источнику получения сведений: <true> означает получение информации из кэша, а <false> - получение информации от *<Open Meteo API>*.
 
-```bash
-cartridge start -d  # if you've stopped instances
-cartridge admin probe \
-  --name tnt-weather-cache \
-  --run-dir ./tmp/run \
-  --uri localhost:3302
-```
+Примеры тестовых запросов для каждой политики управления состоянием кэша приведены в следующих файлах:
+
+1. [FIFO](test/integration/curl/fifo_test.sh) *(first-in-first-out)*.
+2. [LRU](test/integration/curl/lru_test.sh) *(least reasently used)*.
+3. [LRA](test/integration/curl/lra_test.sh) *(least reasently accessed)*.
+
+
+> Полное описание конфигурационных параметров, определяющих работу внешнего API приведено [по ссылке](#параметры-подключения-к-open-meteo-api) 

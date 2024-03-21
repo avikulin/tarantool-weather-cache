@@ -3,7 +3,11 @@
 --- Created by avikulin.
 --- DateTime: 19.03.2024 17:26
 ---
-local log = require('log')
+
+local json = require('json')
+local log = require('log').new("validation-util")
+log.cfg{ level='info'}
+
 
 local function check_string_is_empty(s)
     return s == nil or s == ''
@@ -19,30 +23,41 @@ local function validate_string_value(name, value, err_msg)
 end
 
 local function validate_array_value(name, array, err_msg)
-    if (array == nil or type(array)~="array" or #array == 0) then
-        log.error(err_msg..".\nPassed value for ["..name.."] is not a valid array: "..array)
+    if (array == nil or type(array)~="table" or #array == 0) then
+        log.error(err_msg..".\nPassed value for ["..name.."] is not a valid array: "..type(array))
         return false
     end
     return true
 end
 
+
 local function validate_numeric_value(name, value, min, max, err_msg)
-    if (type(value) ~= "number") then
-        log.error(err_msg..".\nPassed value for ["..name.."] is not a numeric: "..value)
+    if (tonumber(value) == nil) then
+        log.error(err_msg..".\nPassed value for ["..name.."] is not a numeric")
         return false
     end
 
     local x = tonumber(value)
+
     if ((x < min) or (x > max)) then
-        log.error(err_msg..".\nPassed value for ["..name.."] exceeds available range: min = "..min..",
-        max = "..max.."Actual value: "..value)
+        log.error(err_msg
+            ..".\nPassed value for ["..name.."] exceeds available range: min = "
+            ..min..", max = "
+            ..max.."Actual value: "
+            ..value)
+
         return false
     end
+
     return true
 end
 
+
 local function validate_value_present_in_array(name, array, value, err_msg)
-    if ( ~validate_array(name, array) or ~validate_string(name, value)) then
+    if (
+        not validate_array_value(name, array,err_msg) or
+        not validate_string_value(name, value, err_msg)
+    ) then
         return false
     end
 
@@ -52,14 +67,15 @@ local function validate_value_present_in_array(name, array, value, err_msg)
         end
     end
 
-    log.error(err_msg..".\nPassed value ("..value..") for ["..name.."] is absent in array "..array)
+    log.error(err_msg..".\nPassed value ("..value..") for ["..name.."] is absent in array "..json.encode(array))
     return false
 end
+
 
 return {
     validate_value_present_in_array = validate_value_present_in_array,
     validate_numeric_value = validate_numeric_value,
     validate_array_value = validate_array_value,
     validate_string_value = validate_string_value,
-    check_string_is_empty = check_string_is_empty
+    check_string_is_empty = check_string_is_empty,
 }

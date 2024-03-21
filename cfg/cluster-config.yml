@@ -3,11 +3,15 @@ weather-provider:
   x_coord_param: longitude
   y_coord_param: latitude
   actuality_options:
-    - hourly
-    - daily
     - current
+    - hourly
+    - minutely_15
   query_options:
     - temperature_2m
     - wind_speed_10m
     - relative_humidity_2m
 
+cache-dal:
+  size: 10
+  time-to-live: 30
+  eviction_strategy: lru

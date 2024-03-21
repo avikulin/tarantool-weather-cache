@@ -4,37 +4,161 @@
 --- DateTime: 19.03.2024 13:53
 ---
 
-local X_COORD_QUERY_PARAM<const> = "longitude"
-local Y_COORD_QUERY_PARAM<const> = "latitude"
+local cartridge = require('cartridge')
+local vshard = require('vshard')
+local json = require('json')
+local log = require('log').new("http-handlers")
+local cache_ctx = require('app.src.cache-dal.cache_ctx_adapter')
+local date = require('datetime')
 
-local weather_provider = require('app.src.open_weather_client')
-local weather_provider_metadata = require('app.src.open_weather_client_metadata')
+log.cfg{ level='info'}
+
+local X_COORD_QUERY_PARAM = "longitude"
+local Y_COORD_QUERY_PARAM = "latitude"
+
+local cached_weather_provider = require('app.src.http-client.cache_enabled_weather_adapter')
+local weather_provider_metadata = require('app.src.config.open_weather_client_metadata')
 
 -- Примеры поддерживаемых запросов:
 -- http://localhost:8081/weather/current?latitude=...&longitude=...
 -- http://localhost:8081/weather/hourly?latitude=...&longitude=...
--- http://localhost:8081/weather/daily?latitude=...&longitude=...
+-- http://localhost:8081/weather/minutely_15?latitude=...&longitude=...
 local function get_weather(request_data)
+    -- Получаем и проверяем параметры интеграции с OpenMeteo API
     local global_cfg = cartridge.config_get_deepcopy()
-    local weather_cfg = global_cfg[ROOT_CONFIG_KEY]
+    if (global_cfg == nil) then
+        error("Empty cluster configuration at section <"
+            ..weather_provider_metadata.get_root_cgk_key()..">")
+    end
 
-    local open_weather_client = weather_provider:new(
-        weather_cfg[weather_provider_metadata.get_uri_cfg_key()],
-        weather_cfg[weather_provider_metadata.get_longitude_cfg_key()],
-        weather_cfg[weather_provider_metadata.get_latitude_cfg_key()],
-        weather_cfg[weather_provider_metadata.get_actuality_opts_cfg_key()],
-        weather_cfg[weather_provider_metadata.get_query_opts_cfg_key()]
+    local cfg_root_key = weather_provider_metadata.get_root_cgk_key()
+    local weather_cfg = global_cfg[cfg_root_key]
+
+    -- Формируем параметры вызова
+    local actuality = string.sub(
+                                    request_data.path,
+                                    string.len(weather_provider_metadata.get_route_home_path()) + 1,
+                                    string.len(request_data.path)
     )
 
-    -- обрезаем "weather/"
-
-    local actuality = string.sub(request_data.path, 1, string.len(weather_provider_metadata.get_route_home_path()))
     local x_coord = request_data:query_param(X_COORD_QUERY_PARAM)
-    local y_coort = request_data:query_param(Y_COORD_QUERY_PARAM)
+    local y_coord = request_data:query_param(Y_COORD_QUERY_PARAM)
 
-    return weather_provider:get_weather_info(x_coord, y_coort, actuality)
+    log.info("Preparing query: actuality = "..actuality..", x_coord = "..x_coord..", y_coord = "..y_coord)
+    local response = cached_weather_provider.get_http_weather_data(weather_cfg, x_coord, y_coord, actuality)
+
+
+    local result_body = {}
+    if (response.error_message ~= "") then
+        result_body = response.error_message
+    else
+        result_body = response.data
+    end
+
+    local result =  {
+                        body = response.data,
+                        headers = {
+                            ['content-type'] = 'application/json; charset=utf8',
+                            ['x-cached-data'] = response.cached,
+                            ['x-cache-ttl'] = response.ttl,
+                            ['x-cache-hit-rate'] = response.cache_hit_rate
+                        },
+                        status = response.status
+    }
+    log.info("Retrieved data: "..json.encode(result))
+    return result
+end
+
+local function get(request_data)
+    local id =  request_data:query_param('id')
+    local path = 'test'
+    local bucket_id = vshard.router.bucket_id({id, path})
+
+    local data, err = vshard.router.call(
+        bucket_id, { mode = 'read', prefer_replica=true }, 'cache_lookup', { id, path }
+    )
+
+    if (err ~= nil) then
+        log.error("CRUD error : "..json.encode(err))
+    end
+
+    local most_aged_id, err = vshard.router.call(
+        bucket_id, { mode = 'read', prefer_replica=true }, 'get_most_aged_item_id', nil
+    )
+
+    if (err ~= nil) then
+        log.error("CRUD error : "..json.encode(err))
+    end
+
+    local less_usage_id, err = vshard.router.call(
+        bucket_id, { mode = 'read', prefer_replica=true }, 'get_less_usage_item_id', nil
+    )
+
+    if (err ~= nil) then
+        log.error("CRUD error : "..json.encode(err))
+    end
+
+    local most_late_accessed_item_id, err = vshard.router.call(
+        bucket_id, { mode = 'read', prefer_replica=true }, 'get_most_late_accessed_item_id', nil
+    )
+
+    if (err ~= nil) then
+        log.error("CRUD error : "..json.encode(err))
+    end
+
+    return {body = 'Hello!\n\nRequest data:\n\n'
+        ..'uri= '..request_data.path_raw
+        ..'\nquery= '..request_data.query
+        ..'\nresult = '..json.encode(data)
+        ..'\ncache stats: {most aged = '..json.encode(most_aged_id)
+        ..", less usage = "..json.encode(less_usage_id)
+        ..", lately accessed = "..json.encode(most_late_accessed_item_id)
+        .."}"
+    ,
+        status=200
+    }
+
+end
+
+local function put(request_data)
+    local id =  request_data:query_param('id')
+    local path = 'test'
+    local bucket_id = vshard.router.bucket_id({id, path})
+    local response_data = 'Some valuable response'
+    local usage_rating = 0
+    local created_moment = date.now()
+
+    local dto = {
+        request_key = id,
+        request_path = path,
+        bucket_id = bucket_id,
+        response_data = response_data,
+        usage_rating= usage_rating,
+        created_moment = created_moment
+
+    }
+
+    log.info("Test DTO: "..json.encode(dto))
+
+    local res, err = vshard.router.call(
+        bucket_id, { mode = 'write', prefer_replica=true }, 'cache_put', { dto }
+    )
+
+    if (err ~= nil) then
+        log.error("CRUD error : "..json.encode(err))
+    end
+
+    return {body = 'Hello!\n\nRequest data:\n\n'
+        ..'uri= '..request_data.path_raw
+        ..'\nquery= '..request_data.query
+        ..'\nresult = '..json.encode(res), status=200}
+
 end
 
 return {
+    get = get,
+    put = put,
     get_weather = get_weather
 }
+
+
